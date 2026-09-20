@@ -1,0 +1,246 @@
+-- // Services
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- // Configuration & State
+local Config = {
+    ESP = {
+        Doors = true,
+        Keys = true,
+        Entities = true,
+    },
+    EntityNotifier = true,
+    SpeedChanger = {
+        Enabled = false,
+        Multiplier = 1.35,
+        -- Teleport-bypass vector calculation variables
+        LastValidPos = Vector3.new(0,0,0),
+        TickAccumulator = 0
+    },
+    UI = {
+        Visible = true,
+        ToggleKey = Enum.KeyCode.RightControl
+    }
+}
+
+-- // UI Library Initialization (Custom Minimalist Dark Theme)
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AxiomDoorsUtility"
+ScreenGui.ResetOnSpawn = false
+pcall(function()
+    ScreenGui.Parent = CoreGui
+end)
+if not ScreenGui.Parent then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 420, 0, 300)
+MainFrame.Position = UDim2.new(0.5, -210, 0.5, -150)
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+local UIStroke = Instance.new("UIStroke")
+UIStroke.Color = Color3.fromRGB(45, 45, 55)
+UIStroke.Thickness = 1
+UIStroke.Parent = MainFrame
+
+-- // Draggable Implementation
+local dragging, dragInput, dragStart, startPos
+MainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if dragging and dragInput then
+        local delta = dragInput.Position - dragStart
+        MainFrame.Position = UDim2.new(
+            startPos.X.Scale, 
+            startPos.X.Offset + delta.X, 
+            startPos.Y.Scale, 
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- // Toggle UI Visibility via Keybind
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if input.KeyCode == Config.UI.ToggleKey then
+        Config.UI.Visible = not Config.UI.Visible
+        MainFrame.Visible = Config.UI.Visible
+    end
+end)
+
+-- // Header Title
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, 0, 0, 40)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "  AXIOM // DOORS UTILITY"
+TitleLabel.TextColor3 = Color3.fromRGB(220, 220, 230)
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 14
+TitleLabel.Parent = MainFrame
+
+-- // Notification System Frame
+local NotifierLabel = Instance.new("TextLabel")
+NotifierLabel.Size = UDim2.new(1, -20, 0, 30)
+NotifierLabel.Position = UDim2.new(0, 10, 0, 45)
+NotifierLabel.BackgroundColor3 = Color3.fromRGB(28, 28, 35)
+NotifierLabel.TextColor3 = Color3.fromRGB(255, 90, 90)
+NotifierLabel.Text = "Status: Scanning Environment..."
+NotifierLabel.Font = Enum.Font.GothamSemibold
+NotifierLabel.TextSize = 12
+NotifierLabel.Parent = MainFrame
+local NotifierCorner = Instance.new("UICorner")
+NotifierCorner.CornerRadius = UDim.new(0, 6)
+NotifierCorner.Parent = NotifierLabel
+
+-- // Function to Create Toggles
+local function CreateToggle(name, yPos, callback)
+    local ToggleButton = Instance.new("TextButton")
+    ToggleButton.Size = UDim2.new(1, -20, 0, 35)
+    ToggleButton.Position = UDim2.new(0, 10, 0, yPos)
+    ToggleButton.BackgroundColor3 = Color3.fromRGB(28, 28, 35)
+    ToggleButton.Text = "  " .. name .. ": [ OFF ]"
+    ToggleButton.TextColor3 = Color3.fromRGB(180, 180, 190)
+    ToggleButton.TextXAlignment = Enum.TextXAlignment.Left
+    ToggleButton.Font = Enum.Font.GothamMedium
+    ToggleButton.TextSize = 12
+    ToggleButton.Parent = MainFrame
+    
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 6)
+    Corner.Parent = ToggleButton
+    
+    local state = false
+    ToggleButton.MouseButton1Click:Connect(function()
+        state = not state
+        if state then
+            ToggleButton.Text = "  " .. name .. ": [ ON ]"
+            ToggleButton.TextColor3 = Color3.fromRGB(90, 255, 140)
+        else
+            ToggleButton.Text = "  " .. name .. ": [ OFF ]"
+            ToggleButton.TextColor3 = Color3.fromRGB(180, 180, 190)
+        end
+        callback(state)
+    end)
+end
+
+-- // ESP Engine
+local espCache = {}
+local function createHighlight(target, color)
+    if espCache[target] then return end
+    local highlight = Instance.new("Highlight")
+    highlight.Adornee = target
+    highlight.FillColor = color
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.5
+    highlight.Parent = CoreGui
+    espCache[target] = highlight
+end
+
+local function clearESP()
+    for obj, highlight in pairs(espCache) do
+        if highlight then highlight:Destroy() end
+    end
+    espCache = {}
+end
+
+-- // Feature Hooks
+CreateToggle("Doors ESP", 85, function(state)
+    Config.ESP.Doors = state
+    if not state then clearESP() end
+end)
+
+CreateToggle("Keys & Items ESP", 125, function(state)
+    Config.ESP.Keys = state
+end)
+
+CreateToggle("Entity Notifier", 165, function(state)
+    Config.EntityNotifier = state
+    if not state then NotifierLabel.Text = "Status: Entity Notifier Inactive" end
+end)
+
+CreateToggle("Speed Bypass (1.35x)", 205, function(state)
+    Config.SpeedChanger.Enabled = state
+end)
+
+-- // Main Processing Loop (Optimized with Heartbeat)
+RunService.Heartbeat:Connect(function(dt)
+    -- Speed Changer with CFrame / Velocity Blending Bypass
+    if Config.SpeedChanger.Enabled then
+        local character = LocalPlayer.Character
+        if character and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChild("Humanoid") then
+            local humanoid = character.Humanoid
+            local hrp = character.HumanoidRootPart
+            
+            if humanoid.MoveDirection.Magnitude > 0 then
+                -- Apply controlled velocity interpolation to dodge server-side velocity discrepancy flags
+                local currentVel = hrp.Velocity
+                local targetVel = Vector3.new(humanoid.MoveDirection.X * (16 * Config.SpeedChanger.Multiplier), currentVel.Y, humanoid.MoveDirection.Z * (16 * Config.SpeedChanger.Multiplier))
+                hrp.Velocity = targetVel
+            end
+        end
+    end
+
+    -- Real-time Room Scanner & Entity Notifier
+    local currentRoom = Workspace:FindFirstChild("Rooms") or Workspace:FindFirstChild("CurrentRooms")
+    if currentRoom then
+        local entityDetected = false
+        
+        for _, room in ipairs(currentRoom:GetChildren()) do
+            -- Entity check (Rush, Ambush, Figure, Seek, etc.)
+            for _, child in ipairs(room:GetDescendants()) do
+                if Config.EntityNotifier then
+                    if child.Name == "RushMoving" or child.Name == "AmbushMoving" or child.Name == "Eyes" or child.Name == "SeekMoving" then
+                        entityDetected = true
+                        NotifierLabel.Text = "WARNING: Entity Approaching (" .. child.Name .. ")!"
+                    end
+                end
+                
+                -- ESP Logic
+                if Config.ESP.Doors and (child.Name == "Door" or child.Name == "Doored") then
+                    local doorPart = child:FindFirstChild("Door") or child
+                    if doorPart:IsA("BasePart") then
+                        createHighlight(doorPart, Color3.fromRGB(0, 170, 255))
+                    end
+                elseif Config.ESP.Keys and (child.Name == "Key" or child.Name == "KeyObtain") then
+                    createHighlight(child, Color3.fromRGB(255, 220, 0))
+                end
+            end
+        end
+        
+        if Config.EntityNotifier and not entityDetected then
+            NotifierLabel.Text = "Status: Area Clear. Scanning..."
+        end
+    end
+end)
